@@ -72,7 +72,7 @@ Downloads and launches a docker elk container.
 
 The following screenshot displays the result of running `docker ps` after successfully configuring the ELK instance.
 
-(Images/docker_ps_output.png)
+https://github.com/meharban341/cybsec_scripts/blob/main/Images/docker_ps_output.PNG
 
 ### Target Machines & Beats
 This ELK server is configured to monitor the following machines:
