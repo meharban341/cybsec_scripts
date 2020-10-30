@@ -25,7 +25,7 @@ The main purpose of this network is to expose a load-balanced and monitored inst
 Load balancing ensures that the application will be highly availability, in addition to restricting traffic to the network.
 
 
-Integrating an ELK server allows users to easily monitor the vulnerable VMs for changes to the file and system metrics.
+Integrating an ELK server allows users to easily monitor the VMs for changes to the file and system metrics.
 
 
 The configuration details of each machine may be found below.
@@ -96,4 +96,3 @@ SSH into the control node and follow the steps below:
 
 
 
-_As a **Bonus**, provide the specific commands the user will need to run to download the playbook, update the files, etc._
