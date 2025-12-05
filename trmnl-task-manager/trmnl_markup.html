@@ -1,0 +1,121 @@
+<!--
+  TRMNL Task Manager Widget - Markup Template
+  Copy this into your TRMNL Private Plugin Markup Editor
+
+  This template displays Windows Server performance metrics similar to Task Manager
+-->
+
+<div class="layout layout--col">
+  <!-- Header with system info -->
+  <div class="columns">
+    <div class="column">
+      <span class="title title--small">{{ system.hostname }}</span>
+      <span class="label">{{ system.os }} | Up: {{ system.uptime }}</span>
+    </div>
+  </div>
+
+  <div class="gap gap--small"></div>
+
+  <!-- CPU and Memory Row -->
+  <div class="columns columns--2">
+    <!-- CPU Section -->
+    <div class="column">
+      <div class="item">
+        <span class="label label--small">CPU</span>
+        <span class="value value--large">{{ cpu.usage_percent }}%</span>
+        <div class="description">
+          <code>{{ cpu.usage_bar }}</code>
+        </div>
+        <span class="label label--small">{{ cpu.cores_logical }} cores @ {{ cpu.frequency_mhz }} MHz</span>
+      </div>
+    </div>
+
+    <!-- Memory Section -->
+    <div class="column">
+      <div class="item">
+        <span class="label label--small">MEMORY</span>
+        <span class="value value--large">{{ memory.usage_percent }}%</span>
+        <div class="description">
+          <code>{{ memory.usage_bar }}</code>
+        </div>
+        <span class="label label--small">{{ memory.used }} / {{ memory.total }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Disk Section -->
+  <div class="columns">
+    <div class="column">
+      <span class="label label--underline">DISK</span>
+    </div>
+  </div>
+  <div class="columns columns--2">
+    {% for disk in disk.partitions limit:2 %}
+    <div class="column">
+      <div class="item item--small">
+        <span class="label label--small">{{ disk.mountpoint }}</span>
+        <span class="value">{{ disk.percent }}%</span>
+        <span class="description">{{ disk.used }}/{{ disk.total }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Network Section -->
+  <div class="columns columns--2">
+    <div class="column">
+      <div class="item item--small">
+        <span class="label label--small">NET ▼</span>
+        <span class="value">{{ network.bytes_recv }}</span>
+      </div>
+    </div>
+    <div class="column">
+      <div class="item item--small">
+        <span class="label label--small">NET ▲</span>
+        <span class="value">{{ network.bytes_sent }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Top Processes -->
+  <div class="columns">
+    <div class="column">
+      <span class="label label--underline">TOP PROCESSES (CPU)</span>
+    </div>
+  </div>
+
+  <div class="columns">
+    <div class="column">
+      <table class="table table--small">
+        <thead>
+          <tr>
+            <th>Process</th>
+            <th>CPU%</th>
+            <th>MEM%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for proc in processes.by_cpu limit:4 %}
+          <tr>
+            <td>{{ proc.name }}</td>
+            <td>{{ proc.cpu }}</td>
+            <td>{{ proc.memory }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="title_bar">
+  <img class="image" src="https://usetrmnl.com/images/plugins/trmnl--render.svg" />
+  <span class="title">Task Manager</span>
+  <span class="instance">{{ timestamp }}</span>
+</div>
