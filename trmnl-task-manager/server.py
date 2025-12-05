@@ -2,6 +2,9 @@
 TRMNL Task Manager Widget - Windows Server Metrics API
 Collects system performance metrics and exposes them for TRMNL polling.
 
+Supports optional HWiNFO64 integration via Remote Sensor Monitor for
+detailed hardware metrics (temps, voltages, network throughput, etc.)
+
 Run this on your Windows Server 2019 machine.
 """
 
@@ -9,13 +12,22 @@ import json
 import psutil
 import platform
 import socket
+import urllib.request
+import urllib.error
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Any
+from typing import Any, Optional
 
 # Configuration
 HOST = "0.0.0.0"  # Listen on all interfaces
 PORT = 8080       # Change if needed
+
+# HWiNFO64 Remote Sensor Monitor Integration (optional)
+# Download from: https://www.hwinfo.com/forum/threads/introducing-remote-sensor-monitor-a-restful-web-server.1025/
+HWINFO_ENABLED = True                    # Set to False to disable HWiNFO integration
+HWINFO_HOST = "127.0.0.1"                # Remote Sensor Monitor host
+HWINFO_PORT = 55555                      # Remote Sensor Monitor port (default: 55555)
+HWINFO_TIMEOUT = 2                       # Timeout in seconds
 
 
 def get_size(bytes_val: float, suffix: str = "B") -> str:
@@ -109,6 +121,257 @@ def get_network_metrics() -> dict[str, Any]:
     }
 
 
+# =============================================================================
+# HWiNFO64 Integration via Remote Sensor Monitor
+# =============================================================================
+
+def fetch_hwinfo_data() -> Optional[list[dict]]:
+    """Fetch sensor data from HWiNFO64 via Remote Sensor Monitor."""
+    if not HWINFO_ENABLED:
+        return None
+
+    try:
+        url = f"http://{HWINFO_HOST}:{HWINFO_PORT}"
+        request = urllib.request.Request(url, headers={'User-Agent': 'TRMNL-TaskManager/1.0'})
+        with urllib.request.urlopen(request, timeout=HWINFO_TIMEOUT) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            return data
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
+        # HWiNFO not available, fail silently
+        return None
+
+
+def find_hwinfo_sensor(data: list[dict], sensor_class: str = None,
+                        sensor_name: str = None, partial_match: bool = True) -> Optional[dict]:
+    """Find a specific sensor in HWiNFO data."""
+    if not data:
+        return None
+
+    for sensor in data:
+        class_match = True
+        name_match = True
+
+        if sensor_class:
+            if partial_match:
+                class_match = sensor_class.lower() in sensor.get('SensorClass', '').lower()
+            else:
+                class_match = sensor.get('SensorClass', '').lower() == sensor_class.lower()
+
+        if sensor_name:
+            if partial_match:
+                name_match = sensor_name.lower() in sensor.get('SensorName', '').lower()
+            else:
+                name_match = sensor.get('SensorName', '').lower() == sensor_name.lower()
+
+        if class_match and name_match:
+            return sensor
+
+    return None
+
+
+def find_hwinfo_sensors(data: list[dict], sensor_class: str = None,
+                         sensor_name: str = None, partial_match: bool = True) -> list[dict]:
+    """Find all matching sensors in HWiNFO data."""
+    if not data:
+        return []
+
+    results = []
+    for sensor in data:
+        class_match = True
+        name_match = True
+
+        if sensor_class:
+            if partial_match:
+                class_match = sensor_class.lower() in sensor.get('SensorClass', '').lower()
+            else:
+                class_match = sensor.get('SensorClass', '').lower() == sensor_class.lower()
+
+        if sensor_name:
+            if partial_match:
+                name_match = sensor_name.lower() in sensor.get('SensorName', '').lower()
+            else:
+                name_match = sensor.get('SensorName', '').lower() == sensor_name.lower()
+
+        if class_match and name_match:
+            results.append(sensor)
+
+    return results
+
+
+def get_hwinfo_network_metrics(hwinfo_data: list[dict]) -> dict[str, Any]:
+    """Extract network metrics from HWiNFO64 data."""
+    if not hwinfo_data:
+        return {}
+
+    network = {
+        "available": True,
+        "adapters": []
+    }
+
+    # Find network-related sensors
+    # Common HWiNFO network sensor names:
+    # - "Current DL rate" / "Current UL rate" (download/upload speed)
+    # - "DL Bandwidth Usage" / "UL Bandwidth Usage"
+    # - "Total DL" / "Total UL" (total transferred)
+
+    dl_rate = find_hwinfo_sensor(hwinfo_data, sensor_name="Current DL rate")
+    ul_rate = find_hwinfo_sensor(hwinfo_data, sensor_name="Current UL rate")
+    dl_total = find_hwinfo_sensor(hwinfo_data, sensor_name="Total DL")
+    ul_total = find_hwinfo_sensor(hwinfo_data, sensor_name="Total UL")
+
+    # Also look for per-adapter stats
+    dl_rates = find_hwinfo_sensors(hwinfo_data, sensor_name="DL rate")
+    ul_rates = find_hwinfo_sensors(hwinfo_data, sensor_name="UL rate")
+
+    if dl_rate:
+        network["download_rate"] = f"{dl_rate.get('SensorValue', '0')} {dl_rate.get('SensorUnit', 'KB/s')}"
+        network["download_rate_value"] = float(dl_rate.get('SensorValue', 0))
+
+    if ul_rate:
+        network["upload_rate"] = f"{ul_rate.get('SensorValue', '0')} {ul_rate.get('SensorUnit', 'KB/s')}"
+        network["upload_rate_value"] = float(ul_rate.get('SensorValue', 0))
+
+    if dl_total:
+        network["total_download"] = f"{dl_total.get('SensorValue', '0')} {dl_total.get('SensorUnit', 'MB')}"
+
+    if ul_total:
+        network["total_upload"] = f"{ul_total.get('SensorValue', '0')} {ul_total.get('SensorUnit', 'MB')}"
+
+    # Build per-adapter info if available
+    for dl in dl_rates:
+        adapter_name = dl.get('SensorClass', 'Unknown')
+        # Find matching upload rate
+        ul = None
+        for u in ul_rates:
+            if u.get('SensorClass') == adapter_name:
+                ul = u
+                break
+
+        network["adapters"].append({
+            "name": adapter_name[:25],
+            "download": f"{dl.get('SensorValue', '0')} {dl.get('SensorUnit', 'KB/s')}",
+            "upload": f"{ul.get('SensorValue', '0')} {ul.get('SensorUnit', 'KB/s')}" if ul else "N/A"
+        })
+
+    return network
+
+
+def get_hwinfo_temps(hwinfo_data: list[dict]) -> dict[str, Any]:
+    """Extract temperature readings from HWiNFO64 data."""
+    if not hwinfo_data:
+        return {}
+
+    temps = {}
+
+    # CPU Temperature
+    cpu_temp = find_hwinfo_sensor(hwinfo_data, sensor_name="CPU Package")
+    if not cpu_temp:
+        cpu_temp = find_hwinfo_sensor(hwinfo_data, sensor_name="CPU (Tctl/Tdie)")
+    if not cpu_temp:
+        cpu_temp = find_hwinfo_sensor(hwinfo_data, sensor_name="Core Temperatures")
+
+    if cpu_temp and cpu_temp.get('SensorUnit') == '°C':
+        temps["cpu_temp"] = f"{cpu_temp.get('SensorValue', 'N/A')}°C"
+        temps["cpu_temp_value"] = float(cpu_temp.get('SensorValue', 0))
+
+    # GPU Temperature
+    gpu_temp = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Temperature")
+    if gpu_temp and gpu_temp.get('SensorUnit') == '°C':
+        temps["gpu_temp"] = f"{gpu_temp.get('SensorValue', 'N/A')}°C"
+        temps["gpu_temp_value"] = float(gpu_temp.get('SensorValue', 0))
+
+    # Motherboard/System temp
+    sys_temp = find_hwinfo_sensor(hwinfo_data, sensor_name="System")
+    if not sys_temp:
+        sys_temp = find_hwinfo_sensor(hwinfo_data, sensor_name="Motherboard")
+
+    if sys_temp and sys_temp.get('SensorUnit') == '°C':
+        temps["system_temp"] = f"{sys_temp.get('SensorValue', 'N/A')}°C"
+
+    # SSD/HDD temps
+    drive_temps = find_hwinfo_sensors(hwinfo_data, sensor_name="Drive Temperature")
+    if drive_temps:
+        temps["drive_temps"] = []
+        for dt in drive_temps[:4]:  # Limit to 4 drives
+            temps["drive_temps"].append({
+                "name": dt.get('SensorClass', 'Drive')[:15],
+                "temp": f"{dt.get('SensorValue', 'N/A')}°C"
+            })
+
+    return temps
+
+
+def get_hwinfo_gpu_metrics(hwinfo_data: list[dict]) -> dict[str, Any]:
+    """Extract GPU metrics from HWiNFO64 data."""
+    if not hwinfo_data:
+        return {}
+
+    gpu = {}
+
+    # GPU Usage/Load
+    gpu_load = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Core Load")
+    if not gpu_load:
+        gpu_load = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Utilization")
+
+    if gpu_load:
+        gpu["usage_percent"] = float(gpu_load.get('SensorValue', 0))
+        gpu["usage_bar"] = "█" * int(gpu["usage_percent"] / 10) + "░" * (10 - int(gpu["usage_percent"] / 10))
+
+    # GPU Memory
+    gpu_mem = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Memory Usage")
+    if not gpu_mem:
+        gpu_mem = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Memory Allocated")
+
+    if gpu_mem:
+        gpu["memory_used"] = f"{gpu_mem.get('SensorValue', '0')} {gpu_mem.get('SensorUnit', 'MB')}"
+
+    # GPU Clock
+    gpu_clock = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Clock")
+    if gpu_clock:
+        gpu["clock_mhz"] = f"{gpu_clock.get('SensorValue', '0')} MHz"
+
+    # GPU Power
+    gpu_power = find_hwinfo_sensor(hwinfo_data, sensor_name="GPU Power")
+    if gpu_power:
+        gpu["power_watts"] = f"{gpu_power.get('SensorValue', '0')} W"
+
+    return gpu
+
+
+def get_hwinfo_fan_speeds(hwinfo_data: list[dict]) -> list[dict]:
+    """Extract fan speed readings from HWiNFO64 data."""
+    if not hwinfo_data:
+        return []
+
+    fans = []
+    fan_sensors = find_hwinfo_sensors(hwinfo_data, sensor_name="Fan")
+
+    for fan in fan_sensors[:6]:  # Limit to 6 fans
+        if fan.get('SensorUnit') == 'RPM':
+            fans.append({
+                "name": fan.get('SensorName', 'Fan')[:15],
+                "rpm": f"{fan.get('SensorValue', '0')} RPM"
+            })
+
+    return fans
+
+
+def get_all_hwinfo_metrics() -> dict[str, Any]:
+    """Collect all HWiNFO64 metrics."""
+    hwinfo_data = fetch_hwinfo_data()
+
+    if not hwinfo_data:
+        return {"available": False}
+
+    return {
+        "available": True,
+        "network": get_hwinfo_network_metrics(hwinfo_data),
+        "temps": get_hwinfo_temps(hwinfo_data),
+        "gpu": get_hwinfo_gpu_metrics(hwinfo_data),
+        "fans": get_hwinfo_fan_speeds(hwinfo_data)
+    }
+
+
 def get_top_processes(limit: int = 5) -> list[dict[str, Any]]:
     """Get top processes by CPU and memory usage."""
     processes = []
@@ -159,7 +422,7 @@ def get_system_info() -> dict[str, Any]:
 
 def collect_all_metrics() -> dict[str, Any]:
     """Collect all system metrics for TRMNL."""
-    return {
+    metrics = {
         "merge_variables": {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "system": get_system_info(),
@@ -167,9 +430,18 @@ def collect_all_metrics() -> dict[str, Any]:
             "memory": get_memory_metrics(),
             "disk": get_disk_metrics(),
             "network": get_network_metrics(),
-            "processes": get_top_processes(5)
+            "processes": get_top_processes(5),
+            "hwinfo": get_all_hwinfo_metrics()
         }
     }
+
+    # If HWiNFO network data is available, enhance the network section
+    hwinfo = metrics["merge_variables"]["hwinfo"]
+    if hwinfo.get("available") and hwinfo.get("network", {}).get("download_rate"):
+        metrics["merge_variables"]["network"]["hwinfo_download"] = hwinfo["network"].get("download_rate", "N/A")
+        metrics["merge_variables"]["network"]["hwinfo_upload"] = hwinfo["network"].get("upload_rate", "N/A")
+
+    return metrics
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -203,6 +475,15 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
 def main():
     """Start the metrics server."""
+    # Check HWiNFO availability
+    hwinfo_status = "Disabled"
+    if HWINFO_ENABLED:
+        hwinfo_data = fetch_hwinfo_data()
+        if hwinfo_data:
+            hwinfo_status = f"Connected ({len(hwinfo_data)} sensors)"
+        else:
+            hwinfo_status = f"Not detected (port {HWINFO_PORT})"
+
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║          TRMNL Task Manager Widget - Metrics Server          ║
@@ -210,6 +491,8 @@ def main():
 ║  Endpoints:                                                  ║
 ║    GET /metrics  - Returns all system metrics (JSON)         ║
 ║    GET /health   - Health check                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  HWiNFO64: {hwinfo_status:<49}║
 ╠══════════════════════════════════════════════════════════════╣
 ║  For TRMNL Polling URL use:                                  ║
 ║    http://<your-server-ip>:{PORT}/metrics                    ║

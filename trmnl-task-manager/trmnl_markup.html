@@ -1,8 +1,9 @@
 <!--
-  TRMNL Task Manager Widget - Markup Template
+  TRMNL Task Manager Widget - Markup Template (with HWiNFO64 support)
   Copy this into your TRMNL Private Plugin Markup Editor
 
-  This template displays Windows Server performance metrics similar to Task Manager
+  This template displays Windows Server performance metrics including
+  real-time network throughput from HWiNFO64 (when available)
 -->
 
 <div class="layout layout--col">
@@ -21,7 +22,7 @@
     <!-- CPU Section -->
     <div class="column">
       <div class="item">
-        <span class="label label--small">CPU</span>
+        <span class="label label--small">CPU {% if hwinfo.temps.cpu_temp %}({{ hwinfo.temps.cpu_temp }}){% endif %}</span>
         <span class="value value--large">{{ cpu.usage_percent }}%</span>
         <div class="description">
           <code>{{ cpu.usage_bar }}</code>
@@ -45,40 +46,90 @@
 
   <div class="divider"></div>
 
-  <!-- Disk Section -->
+  <!-- Network Section - Enhanced with HWiNFO throughput -->
   <div class="columns">
     <div class="column">
-      <span class="label label--underline">DISK</span>
+      <span class="label label--underline">NETWORK</span>
     </div>
   </div>
+
+  {% if hwinfo.available and hwinfo.network.download_rate %}
+  <!-- Real-time throughput from HWiNFO64 -->
   <div class="columns columns--2">
-    {% for disk in disk.partitions limit:2 %}
     <div class="column">
       <div class="item item--small">
-        <span class="label label--small">{{ disk.mountpoint }}</span>
-        <span class="value">{{ disk.percent }}%</span>
-        <span class="description">{{ disk.used }}/{{ disk.total }}</span>
+        <span class="label label--small">DOWNLOAD</span>
+        <span class="value">{{ hwinfo.network.download_rate }}</span>
       </div>
     </div>
-    {% endfor %}
+    <div class="column">
+      <div class="item item--small">
+        <span class="label label--small">UPLOAD</span>
+        <span class="value">{{ hwinfo.network.upload_rate }}</span>
+      </div>
+    </div>
   </div>
-
-  <div class="divider"></div>
-
-  <!-- Network Section -->
+  <div class="columns columns--2">
+    <div class="column">
+      <span class="label label--small">Total: {{ hwinfo.network.total_download | default: network.bytes_recv }}</span>
+    </div>
+    <div class="column">
+      <span class="label label--small">Total: {{ hwinfo.network.total_upload | default: network.bytes_sent }}</span>
+    </div>
+  </div>
+  {% else %}
+  <!-- Fallback to basic network stats -->
   <div class="columns columns--2">
     <div class="column">
       <div class="item item--small">
-        <span class="label label--small">NET ▼</span>
+        <span class="label label--small">RECEIVED</span>
         <span class="value">{{ network.bytes_recv }}</span>
       </div>
     </div>
     <div class="column">
       <div class="item item--small">
-        <span class="label label--small">NET ▲</span>
+        <span class="label label--small">SENT</span>
         <span class="value">{{ network.bytes_sent }}</span>
       </div>
     </div>
+  </div>
+  {% endif %}
+
+  <div class="divider"></div>
+
+  <!-- Disk and GPU Row -->
+  <div class="columns columns--2">
+    <!-- Disk Section -->
+    <div class="column">
+      <span class="label label--underline">DISK</span>
+      {% for disk in disk.partitions limit:2 %}
+      <div class="item item--small">
+        <span class="label label--small">{{ disk.mountpoint }}</span>
+        <span class="value">{{ disk.percent }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- GPU Section (HWiNFO) -->
+    {% if hwinfo.available and hwinfo.gpu.usage_percent %}
+    <div class="column">
+      <span class="label label--underline">GPU {% if hwinfo.temps.gpu_temp %}({{ hwinfo.temps.gpu_temp }}){% endif %}</span>
+      <div class="item item--small">
+        <span class="value">{{ hwinfo.gpu.usage_percent }}%</span>
+        <code>{{ hwinfo.gpu.usage_bar }}</code>
+        {% if hwinfo.gpu.memory_used %}<span class="label label--small">{{ hwinfo.gpu.memory_used }}</span>{% endif %}
+      </div>
+    </div>
+    {% else %}
+    <!-- Show connections if no GPU -->
+    <div class="column">
+      <span class="label label--underline">CONNECTIONS</span>
+      <div class="item item--small">
+        <span class="value value--large">{{ network.active_connections }}</span>
+        <span class="label label--small">active</span>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   <div class="divider"></div>
@@ -86,7 +137,7 @@
   <!-- Top Processes -->
   <div class="columns">
     <div class="column">
-      <span class="label label--underline">TOP PROCESSES (CPU)</span>
+      <span class="label label--underline">TOP PROCESSES</span>
     </div>
   </div>
 
@@ -96,16 +147,16 @@
         <thead>
           <tr>
             <th>Process</th>
-            <th>CPU%</th>
-            <th>MEM%</th>
+            <th>CPU</th>
+            <th>MEM</th>
           </tr>
         </thead>
         <tbody>
           {% for proc in processes.by_cpu limit:4 %}
           <tr>
             <td>{{ proc.name }}</td>
-            <td>{{ proc.cpu }}</td>
-            <td>{{ proc.memory }}</td>
+            <td>{{ proc.cpu }}%</td>
+            <td>{{ proc.memory }}%</td>
           </tr>
           {% endfor %}
         </tbody>
